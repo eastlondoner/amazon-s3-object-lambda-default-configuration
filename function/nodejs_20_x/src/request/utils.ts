@@ -1,11 +1,13 @@
 /**
  * Contains utility methods for Request handling, such as extracting query parameters.
  */
+import { GetObjectCommand, HeadObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { mapPartNumber, mapPartNumberHead } from '../response/part_number_mapper';
 import { mapRange, mapRangeHead } from '../response/range_mapper';
 import { RangeResponse } from '../response/range_response.types';
 import { UserRequest } from '../s3objectlambda_event.types';
 import fetch, { Response } from 'node-fetch';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
 // Query parameters names
 const RANGE = 'Range';
@@ -102,13 +104,42 @@ function getQueryParam (url: string, name: string): string | null {
   return new URL(url).searchParams.get(name);
 }
 
-export async function makeS3Request (url: string, userRequest: UserRequest, method: 'GET' | 'HEAD'): Promise<Response> {
-  const requestHeaders = getRequestHeaders(userRequest.headers);
-  // TODO: handle fetch errors
-  return fetch(url, {
+export async function makeS3Request (cloudflare: S3Client, url: string, userRequest: UserRequest, method: 'GET' | 'HEAD'): Promise<Response> {
+  const key = new URL(decodeURIComponent(url)).pathname.slice(1);
+  // const originalResult = await makeS3RequestOriginal(url, userRequest, method);
+  // if (key.startsWith('verify_')) {
+  //   return originalResult;
+  // }
+  const headers = removeSignedRequestHeaders(userRequest.headers);
+  console.log(`Got request for ${url}`, key, headers);
+  url = await getSignedUrl(cloudflare,
+    method === 'GET'
+      ? new GetObjectCommand({
+        Bucket: 'andy-redirect-bj66n98jif7a6z6fqd41csrbuse1a--ol-s3',
+        Key: key,
+        // eslint-disable-next-line @typescript-eslint/strict-boolean-expressions
+        ...(headers.range ? { Range: headers.range ?? headers.Range } : {}),
+        // eslint-disable-next-line @typescript-eslint/strict-boolean-expressions
+        ...(headers.partnumber ? { PartNumber: parseInt(headers.partnumber ?? headers.PartNumber ?? headers.partNumber) } : {})
+      })
+      : new HeadObjectCommand({
+        Bucket: 'andy-redirect-bj66n98jif7a6z6fqd41csrbuse1a--ol-s3',
+        Key: key
+      }), { expiresIn: 300 });
+
+  console.log(`Making request to ${url}`, headers);
+  const response = await fetch(url, {
     method,
-    headers: Object.fromEntries(requestHeaders)
+    headers: {
+      // eslint-disable-next-line @typescript-eslint/strict-boolean-expressions
+      ...(headers.range ? { range: headers.range } : {}),
+      // eslint-disable-next-line @typescript-eslint/strict-boolean-expressions
+      ...(headers.partnumber ? { partnumber: headers.partnumber } : {})
+      // Host: 'b9576518138804e154b4e8e36806fce5.r2.cloudflarestorage.com'
+    }
   });
+  console.log(`Got response from ${url.split('?')[0]}`, response.status);
+  return response;
 }
 /**
  * Get all headers that should be included in the pre-signed S3 URL. We do not add headers that will be
@@ -126,4 +157,31 @@ export function getRequestHeaders (headersObj: object): Map<string, string> {
   });
 
   return headersMap;
+}
+
+/**
+ * Get all headers that should be included in the pre-signed S3 URL. We do not add headers that will be
+ * applied after transformation, such as Range.
+ */
+export function removeSignedRequestHeaders (headersObj: object): Record<string, string> {
+  const headersMap: Record<string, string> = {};
+  const headersToBePresigned = ['Host', 'host', 'x-amz-checksum-mode', 'x-amz-request-payer', 'x-amz-expected-bucket-owner', 'If-Match',
+    'If-Modified-Since', 'If-None-Match', 'If-Unmodified-Since'];
+
+  new Map(Object.entries(headersObj)).forEach((value: string, key: string) => {
+    if (!headersToBePresigned.includes(key)) {
+      headersMap[key] = value;
+    }
+  });
+
+  return headersMap;
+}
+
+export async function makeS3RequestOriginal (url: string, userRequest: UserRequest, method: 'GET' | 'HEAD'): Promise<Response> {
+  const requestHeaders = getRequestHeaders(userRequest.headers);
+  // TODO: handle fetch errors
+  return fetch(url, {
+    method,
+    headers: Object.fromEntries(requestHeaders)
+  });
 }

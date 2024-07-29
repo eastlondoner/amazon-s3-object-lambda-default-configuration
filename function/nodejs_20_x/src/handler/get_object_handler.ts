@@ -18,7 +18,7 @@ import { headerToWgorParam, ParamsKeys } from '../response/param_transformer';
  * 5. Sends the final transformed object back to Amazon S3 Object Lambda.
  */
 
-export default async function handleGetObjectRequest (s3Client: S3Client, requestContext: GetObjectContext, userRequest: UserRequest):
+export default async function handleGetObjectRequest ({ s3Client, cloudflare }: {s3Client: S3Client, cloudflare: S3Client}, requestContext: GetObjectContext, userRequest: UserRequest):
 Promise<WriteGetObjectResponseCommandOutput | null> {
   // Validate user request and return error if invalid
   const errorMessage = validate(userRequest);
@@ -27,7 +27,7 @@ Promise<WriteGetObjectResponseCommandOutput | null> {
   }
 
   // Read the original object from Amazon S3
-  const objectResponse = await makeS3Request(requestContext.inputS3Url, userRequest, 'GET');
+  const objectResponse = await makeS3Request(cloudflare, requestContext.inputS3Url, userRequest, 'GET');
   const originalObject = Buffer.from(await objectResponse.arrayBuffer());
 
   if (originalObject === null) {
@@ -46,7 +46,7 @@ Promise<WriteGetObjectResponseCommandOutput | null> {
   }
 
   // Transform the object
-  const transformedWholeObject = transformObject(originalObject);
+  const transformedWholeObject = transformObject(requestContext.inputS3Url.split('?')[0], originalObject);
 
   // Handle range or partNumber if present in the request
   const transformedObject = applyRangeOrPartNumber(transformedWholeObject, userRequest);
@@ -92,7 +92,7 @@ async function writeResponse (s3Client: S3Client, requestContext: GetObjectConte
     }
   });
 
-  console.log('Sending transformed results to the Object Lambda Access Point');
+  console.log('Sending transformed results to the Object Lambda Access Point', JSON.stringify(objectResponse));
   const wgorCommand = new WriteGetObjectResponseCommand({
     RequestRoute: requestContext.outputRoute,
     RequestToken: requestContext.outputToken,

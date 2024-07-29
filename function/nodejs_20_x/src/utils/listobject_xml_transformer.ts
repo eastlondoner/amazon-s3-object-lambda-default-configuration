@@ -8,7 +8,7 @@ export class ListObjectsXmlTransformer <T extends IBaseListObject> {
      * @param listObject The ListObjects which we want to obtain an XML string from
      * @private
      */
-  public createListObjectsXmlResponse (listObject: T): string | null {
+  public createListObjectsXmlResponse (listObject: IBaseListObject): string | null {
     const builder = new Builder({
       rootName: 'ListBucketResult'
     });

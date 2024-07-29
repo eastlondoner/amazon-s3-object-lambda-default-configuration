@@ -1,21 +1,25 @@
+/*
+eslint-disable @typescript-eslint/strict-boolean-expressions,
+*/
 import { BaseObjectContext, UserRequest } from '../s3objectlambda_event.types';
-import { makeS3Request } from '../request/utils';
-import { errorResponse, responseForS3Errors } from '../error/error_response';
-import ErrorCode from '../error/error_code';
 import { Buffer } from 'buffer';
 import { IBaseListObject } from '../s3objectlambda_list_type';
 import { IErrorResponse, IListObjectsResponse, IResponse } from '../s3objectlambda_response.types';
 import { ListObjectsXmlTransformer } from '../utils/listobject_xml_transformer';
+import { ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3';
+import { makeS3RequestOriginal } from '../request/utils';
+import { errorResponse, responseForS3Errors } from '../error/error_response';
+import ErrorCode from '../error/error_code';
 
 /**
  * Class that handles ListObjects requests. Can be used
  * for both ListObjectsV1 and ListObjectsV2 requests
  */
 export class ListObjectsHandler <T extends IBaseListObject> {
-  private readonly transformObject: (listObject: T) => T;
+  private readonly transformObject: (listObject: IBaseListObject) => IBaseListObject;
   private readonly XMLTransformer = new ListObjectsXmlTransformer<T>();
 
-  constructor (transformObject: (listObject: T) => T) {
+  constructor (transformObject: (listObject: IBaseListObject) => IBaseListObject) {
     this.transformObject = transformObject;
   }
 
@@ -26,9 +30,58 @@ export class ListObjectsHandler <T extends IBaseListObject> {
    * 3. Applies a transformation. You can apply your custom transformation logic here.
    * 4. Sends the final transformed object back to Amazon S3 Object Lambda.
    */
-  async handleListObjectsRequest (requestContext: BaseObjectContext, userRequest: UserRequest):
+  async handleListObjectsRequest ({ s3Client, cloudflare }: {s3Client: S3Client, cloudflare: S3Client}, requestContext: BaseObjectContext, userRequest: UserRequest):
   Promise<IResponse> {
-    const objectResponse = await makeS3Request(requestContext.inputS3Url, userRequest, 'GET');
+    const url = new URL(decodeURIComponent(requestContext.inputS3Url));
+
+    if (url.searchParams.get('prefix')?.startsWith('verify_')) {
+      return this.handleListObjectsRequestOriginal(requestContext, userRequest);
+    }
+    const originalResponse = await makeS3RequestOriginal(requestContext.inputS3Url, userRequest, 'GET');
+    console.log('Original response from S3:', ListObjectsHandler.stringFromArrayBuffer(await originalResponse.arrayBuffer()));
+    try {
+      console.log('Prefix:', requestContext.inputS3Url, requestContext);
+      const response = await cloudflare.send(new ListObjectsV2Command({
+        Bucket: 'andy-redirect-bj66n98jif7a6z6fqd41csrbuse1a--ol-s3',
+        Prefix: url.searchParams.get('prefix') ?? '',
+        Delimiter: url.searchParams.get('delimiter') ?? ''
+      }));
+      console.log('Response from cloudflare:', response);
+      const objectResponse: IBaseListObject = {
+        ...response,
+
+        IsTruncated: response.IsTruncated ? response.IsTruncated : false,
+        ...(response.EncodingType ? { EncodingType: response.EncodingType } : {}),
+        MaxKeys: response.MaxKeys ?? 0,
+        ...(response.Prefix ? { Prefix: response.Prefix } : {}),
+        Contents: response.Contents?.map(x => ({
+          ...x,
+          Key: x.Key ?? '',
+          LastModified: x.LastModified?.toISOString() ?? ''
+        }))?.filter(x => !(x.Size === 0 && x.Key.endsWith('/'))) as any,
+        ...(response.Delimiter ? { Delimiter: response.Delimiter } : {}),
+        CommonPrefixes: response.CommonPrefixes ?? [] as any
+      };
+
+      // @ts-expect-error
+      delete objectResponse.$metadata;
+
+      const transformedObject = this.transformObject(objectResponse);
+
+      return this.writeResponse(transformedObject);
+    } catch (e) {
+      console.error('Error occurred in list:', e);
+      const out: IErrorResponse = {
+        statusCode: 500,
+        errorMessage: (e as Error).message
+      };
+      return out;
+    }
+  }
+
+  async handleListObjectsRequestOriginal (requestContext: BaseObjectContext, userRequest: UserRequest):
+  Promise<IResponse> {
+    const objectResponse = await makeS3RequestOriginal(requestContext.inputS3Url, userRequest, 'GET');
 
     const originalObject = await objectResponse.arrayBuffer();
 
@@ -54,8 +107,8 @@ export class ListObjectsHandler <T extends IBaseListObject> {
    * @param objectResponse The response
    * @protected
    */
-  protected writeResponse (objectResponse: T): IListObjectsResponse | IErrorResponse {
-    console.log('Sending transformed results to the Object Lambda Access Point');
+  protected writeResponse (objectResponse: IBaseListObject): IListObjectsResponse | IErrorResponse {
+    console.log('Sending transformed results to the Object Lambda Access Point', objectResponse);
     const xmlListObject = this.XMLTransformer.createListObjectsXmlResponse(objectResponse);
 
     if (xmlListObject === null) {
@@ -66,6 +119,7 @@ export class ListObjectsHandler <T extends IBaseListObject> {
       };
     }
 
+    console.log('Successfully transformed back to XML', xmlListObject);
     return {
       statusCode: 200,
       listResultXml: xmlListObject

@@ -5,6 +5,7 @@ import ErrorCode from '../error/error_code';
 import { transformHeaders } from '../transform/s3objectlambda_transformer';
 import { IErrorResponse, IHeadObjectResponse, IResponse } from '../s3objectlambda_response.types';
 import { applyRangeOrPartNumberHeaders, makeS3Request } from '../request/utils';
+import { S3Client } from '@aws-sdk/client-s3';
 
 /**
  * Handles a HeadObject request, by performing the following steps:
@@ -13,7 +14,7 @@ import { applyRangeOrPartNumberHeaders, makeS3Request } from '../request/utils';
  * 3. Applies a transformation. You can apply your custom transformation logic here.
  * 3. Sends the final transformed headers back to Amazon S3 Object Lambda.
  */
-export default async function handleHeadObjectRequest (requestContext: BaseObjectContext,
+export default async function handleHeadObjectRequest ({ s3Client, cloudflare }: {s3Client: S3Client, cloudflare: S3Client}, requestContext: BaseObjectContext,
   userRequest: UserRequest): Promise<IResponse> {
   // Validate user request and return error if invalid
   const errorMessage = validate(userRequest);
@@ -22,7 +23,7 @@ export default async function handleHeadObjectRequest (requestContext: BaseObjec
   }
 
   // Read the original object from Amazon S3
-  const objectResponse = await makeS3Request(requestContext.inputS3Url, userRequest, 'HEAD');
+  const objectResponse = await makeS3Request(cloudflare, requestContext.inputS3Url, userRequest, 'HEAD');
 
   if (objectResponse.headers == null) {
     return errorResponse(requestContext, ErrorCode.NO_SUCH_KEY, 'Requested key does not exist');

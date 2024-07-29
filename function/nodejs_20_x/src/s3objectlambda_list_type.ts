@@ -1,10 +1,10 @@
 export interface IBaseListObject {
   IsTruncated: boolean
-  EncodingType: string
+  EncodingType?: string
   MaxKeys: number
-  Prefix: string
+  Prefix?: string
   Contents: IObject[]
-  Delimiter: string
+  Delimiter?: string
   CommonPrefixes: ICommonPrefix[]
 }
 

@@ -11,11 +11,13 @@
     "test": "jest",
     "build": "./node_modules/.bin/esbuild src/s3objectlambda.ts --bundle --outfile=s3objectlambda.js --platform=node && eslint 'src/**/*.ts' && jest",
     "package": "zip -ur release/s3objectlambda_deployment_package.zip s3objectlambda.js",
-    "lint": "eslint 'src/**/*.ts'"
+    "lint": "eslint 'src/**/*.ts'",
+    "lint-fix": "eslint --fix 'src/**/*.ts'"
   },
   "files": [],
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.554.0",
+    "@aws-sdk/client-s3": "3.617.0",
+    "@aws-sdk/s3-request-presigner": "3.617.0",
     "@types/node-fetch": "^2.6.1",
     "node-fetch": "2.6.7",
     "xml2js": "^0.5.0"
